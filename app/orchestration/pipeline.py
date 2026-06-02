@@ -9,7 +9,7 @@ from app.agents import (
     PlannerAgent,
     ResearchScientistAgent,
 )
-from app.agents.hermes import HermesClient, LLMClient
+from app.agents.hermes import LLMClient, create_llm_client
 from app.db.models import ExperimentORM, TaskORM
 from app.memory.service import MemoryService
 from app.orchestration.reflection import ReflectionEngine
@@ -20,7 +20,7 @@ class ResearchPipeline:
     def __init__(self, session: Session, llm: LLMClient | None = None) -> None:
         self.session = session
         self.memory = MemoryService(session)
-        self.llm = llm or HermesClient()
+        self.llm = llm or create_llm_client()
         self.planner = PlannerAgent(self.llm, self.memory)
         self.scientist = ResearchScientistAgent(self.llm, self.memory)
         self.engineer = MLEngineerAgent(self.llm, self.memory)
@@ -96,8 +96,11 @@ class ResearchPipeline:
                 reflection_id=reflection_id,
             )
         except Exception:
-            task.status = "failed"
-            self.session.commit()
+            self.session.rollback()
+            failed_task = self.session.get(TaskORM, task.id)
+            if failed_task is not None:
+                failed_task.status = "failed"
+                self.session.commit()
             raise
 
     def _record_experiment(self, task_id: str, result: AgentResult) -> None:

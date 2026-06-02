@@ -4,7 +4,7 @@
 
 | Choice | Options Compared | Decision | Rationale |
 | --- | --- | --- | --- |
-| Agent runtime | Single monolith, queue workers, Hermes adapter | FastAPI orchestrator with Hermes adapter | Runs locally now and can delegate reasoning to Hermes when credentials are configured. |
+| Agent runtime | Single monolith, queue workers, provider adapters | FastAPI orchestrator with Hermes and Gemini adapters | Runs locally now and can delegate reasoning to Hermes or Gemini when credentials are configured. |
 | Memory | Vector-only, graph-only, hybrid | GBrain-style hybrid graph plus Qdrant vector index | Supports semantic retrieval, entity relationships, timelines, and durable audit records. |
 | Persistence | Files, SQLite, PostgreSQL | PostgreSQL | Production-ready JSONB, indexing, relational task/experiment audit trail. |
 | Coordination | Fully autonomous infinite loop, explicit pipeline | Explicit research pipeline with reflection loop | Safer, auditable, and easier to test while still self-improving after every task. |
@@ -13,7 +13,8 @@
 
 ```mermaid
 flowchart LR
-    API[FastAPI API] --> Planner[Planner Agent]
+    UI[Streamlit Frontend] --> API[FastAPI API]
+    API --> Planner[Planner Agent]
     Planner --> Scientist[Research Scientist]
     Scientist --> MLE[ML Engineer]
     MLE --> Critic[Critic Agent]
@@ -75,6 +76,16 @@ flowchart TB
 | `GET` | `/memory` | Inspect recent GBrain memory records. |
 | `GET` | `/metrics` | Prometheus metrics. |
 
+## Frontend
+
+The Streamlit frontend is a thin operational client over the FastAPI service. It provides:
+
+- Research run submission.
+- Pipeline output review.
+- Task table.
+- Memory browser.
+- Health and Prometheus metrics view.
+
 ## Database Schema
 
 The SQL schema is in `infra/postgres/001_schema.sql` and includes:
@@ -87,7 +98,10 @@ The SQL schema is in `infra/postgres/001_schema.sql` and includes:
 ## Operations
 
 1. Copy `.env.example` to `.env`.
-2. Configure `HERMES_API_KEY` and optional `GBRAIN_BASE_URL` when available.
-3. Run `./scripts/deploy.sh`.
-4. Open `http://localhost:8000/docs`.
-5. Monitor Prometheus at `http://localhost:9090`.
+2. For local `uvicorn`, keep `DATABASE_URL`, `REDIS_URL`, and `QDRANT_URL` on `localhost`.
+3. To use Gemini instead, set `LLM_PROVIDER=gemini`, `GEMINI_API_KEY`, and optional `GEMINI_MODEL`.
+4. Configure `HERMES_API_KEY` and optional `GBRAIN_BASE_URL` when available.
+5. Run `./scripts/deploy.sh`; Docker Compose overrides database, Redis, and Qdrant URLs to internal service names.
+6. Open `http://localhost:8000/docs`.
+7. Open the Streamlit frontend at `http://localhost:8501`.
+8. Monitor Prometheus at `http://localhost:9090`.

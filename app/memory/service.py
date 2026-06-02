@@ -1,5 +1,6 @@
 from typing import Any
 
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -25,11 +26,15 @@ class MemoryService:
             source_agent=source_agent,
             title=title,
             content=content,
-            metadata=metadata or {},
+            metadata=self._json_safe(metadata or {}),
         )
         return self.gbrain.store(record)
 
     def recall(self, query: str, limit: int = 8) -> list[MemoryRecord]:
         return self.gbrain.retrieve(query=query, limit=limit)
 
-
+    def _json_safe(self, value: dict[str, Any]) -> dict[str, Any]:
+        encoded = jsonable_encoder(value)
+        if not isinstance(encoded, dict):
+            return {}
+        return encoded

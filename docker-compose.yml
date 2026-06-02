@@ -2,6 +2,10 @@ services:
   api:
     build: .
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://research:research@postgres:5432/research_lab
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
     ports:
       - "8000:8000"
     depends_on:
@@ -11,6 +15,18 @@ services:
         condition: service_started
       qdrant:
         condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    environment:
+      API_BASE_URL: http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
     restart: unless-stopped
 
   postgres:

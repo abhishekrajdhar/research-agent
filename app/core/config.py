@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     qdrant_collection: str = Field(default="research_memories", alias="QDRANT_COLLECTION")
     hermes_base_url: str = Field(default="http://localhost:8080", alias="HERMES_BASE_URL")
     hermes_api_key: str | None = Field(default=None, alias="HERMES_API_KEY")
+    gemini_base_url: str = Field(
+        default="https://generativelanguage.googleapis.com", alias="GEMINI_BASE_URL"
+    )
+    gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
+    gemini_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_MODEL")
     gbrain_base_url: str | None = Field(default=None, alias="GBRAIN_BASE_URL")
     gbrain_api_key: str | None = Field(default=None, alias="GBRAIN_API_KEY")
     llm_provider: str = Field(default="hermes", alias="LLM_PROVIDER")

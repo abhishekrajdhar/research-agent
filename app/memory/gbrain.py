@@ -2,6 +2,7 @@ import re
 from typing import Protocol
 
 import httpx
+import structlog
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, PointStruct, VectorParams
 from sqlalchemy.orm import Session
@@ -9,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.db.models import MemoryORM
 from app.research.schemas import AgentRole, Entity, MemoryRecord, MemoryType, Relation
+
+logger = structlog.get_logger(__name__)
 
 
 class GBrainClient(Protocol):
@@ -29,6 +32,7 @@ class LocalGBrain:
         self.session = session
         self.settings = settings
         self.qdrant = QdrantClient(url=settings.qdrant_url, prefer_grpc=False)
+        self.vector_index_available = True
         self._ensure_collection()
 
     def enrich(self, record: MemoryRecord) -> MemoryRecord:
@@ -70,30 +74,46 @@ class LocalGBrain:
         return [self._from_orm(row) for _, row in scored[:limit]]
 
     def _ensure_collection(self) -> None:
-        existing = {collection.name for collection in self.qdrant.get_collections().collections}
-        if self.settings.qdrant_collection not in existing:
-            self.qdrant.create_collection(
-                collection_name=self.settings.qdrant_collection,
-                vectors_config=VectorParams(size=32, distance=Distance.COSINE),
+        try:
+            existing = {collection.name for collection in self.qdrant.get_collections().collections}
+            if self.settings.qdrant_collection not in existing:
+                self.qdrant.create_collection(
+                    collection_name=self.settings.qdrant_collection,
+                    vectors_config=VectorParams(size=32, distance=Distance.COSINE),
+                )
+        except Exception as exc:
+            self.vector_index_available = False
+            logger.warning(
+                "qdrant_unavailable_using_sql_memory_fallback",
+                qdrant_url=self.settings.qdrant_url,
+                error=str(exc),
             )
 
     def _index_vector(self, record: MemoryRecord) -> None:
-        if record.id is None:
+        if record.id is None or not self.vector_index_available:
             return
-        self.qdrant.upsert(
-            collection_name=self.settings.qdrant_collection,
-            points=[
-                PointStruct(
-                    id=record.id,
-                    vector=self._embed(record.content),
-                    payload={
-                        "memory_type": record.memory_type.value,
-                        "source_agent": record.source_agent.value,
-                        "title": record.title,
-                    },
-                )
-            ],
-        )
+        try:
+            self.qdrant.upsert(
+                collection_name=self.settings.qdrant_collection,
+                points=[
+                    PointStruct(
+                        id=record.id,
+                        vector=self._embed(record.content),
+                        payload={
+                            "memory_type": record.memory_type.value,
+                            "source_agent": record.source_agent.value,
+                            "title": record.title,
+                        },
+                    )
+                ],
+            )
+        except Exception as exc:
+            self.vector_index_available = False
+            logger.warning(
+                "qdrant_indexing_failed_using_sql_memory_fallback",
+                memory_id=record.id,
+                error=str(exc),
+            )
 
     def _embed(self, text: str) -> list[float]:
         buckets = [0.0] * 32
