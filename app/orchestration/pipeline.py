@@ -16,6 +16,10 @@ from app.db.models import ExperimentORM, TaskORM
 from app.memory.service import MemoryService
 from app.orchestration.reflection import ReflectionEngine
 from app.research.schemas import AgentResult, ResearchPipelineResult, ResearchRequest
+import structlog
+
+
+logger = structlog.get_logger(__name__)
 
 
 class ResearchPipeline:
@@ -65,44 +69,114 @@ class ResearchPipeline:
         try:
             context: dict[str, Any] = {"request": request.model_dump(), "task_id": task.id}
 
+            logger.info("stage_start", task_id=task.id, stage="plan")
             plan = self.planner.run("Decompose the research question into a roadmap.", context)
+            logger.info(
+                "stage_complete",
+                task_id=task.id,
+                stage="plan",
+                summary_len=len(plan.summary) if plan and plan.summary else 0,
+            )
             self._update_task_result(task.id, "plan", plan)
             context["plan"] = plan.model_dump()
 
+            logger.info("stage_start", task_id=task.id, stage="literature_review")
             literature = self.scientist.run("Perform literature search and benchmark analysis.", context)
+            logger.info(
+                "stage_complete",
+                task_id=task.id,
+                stage="literature_review",
+                summary_len=len(literature.summary) if literature and literature.summary else 0,
+            )
             self._update_task_result(task.id, "literature_review", literature)
             context["literature"] = literature.model_dump()
 
+            logger.info("stage_start", task_id=task.id, stage="gap_analysis")
             gap = self.scientist.run("Analyze research gaps and unresolved assumptions.", context)
+            logger.info(
+                "stage_complete",
+                task_id=task.id,
+                stage="gap_analysis",
+                summary_len=len(gap.summary) if gap and gap.summary else 0,
+            )
             self._update_task_result(task.id, "gap_analysis", gap)
             context["gap_analysis"] = gap.model_dump()
 
+            logger.info("stage_start", task_id=task.id, stage="hypothesis")
             hypothesis = self.scientist.run("Generate a falsifiable hypothesis and novelty claim.", context)
+            logger.info(
+                "stage_complete",
+                task_id=task.id,
+                stage="hypothesis",
+                summary_len=len(hypothesis.summary) if hypothesis and hypothesis.summary else 0,
+            )
             self._update_task_result(task.id, "hypothesis", hypothesis)
             context["hypothesis"] = hypothesis.model_dump()
 
+            logger.info("stage_start", task_id=task.id, stage="experiment_design")
             experiment_design = self.engineer.run("Design a reproducible experiment.", context)
+            logger.info(
+                "stage_complete",
+                task_id=task.id,
+                stage="experiment_design",
+                summary_len=len(experiment_design.summary) if experiment_design and experiment_design.summary else 0,
+            )
             self._update_task_result(task.id, "experiment_design", experiment_design)
             context["experiment_design"] = experiment_design.model_dump()
 
+            logger.info("stage_start", task_id=task.id, stage="experiment_execution")
             experiment_execution = self.engineer.run("Execute or simulate experiment workflow.", context)
+            logger.info(
+                "stage_complete",
+                task_id=task.id,
+                stage="experiment_execution",
+                summary_len=len(experiment_execution.summary) if experiment_execution and experiment_execution.summary else 0,
+            )
             self._record_experiment(task.id, experiment_execution)
             self._update_task_result(task.id, "experiment_execution", experiment_execution)
             context["experiment_execution"] = experiment_execution.model_dump()
 
+            logger.info("stage_start", task_id=task.id, stage="evaluation")
             evaluation = self.critic.run("Evaluate results, citations, hallucination risk, and novelty.", context)
+            logger.info(
+                "stage_complete",
+                task_id=task.id,
+                stage="evaluation",
+                summary_len=len(evaluation.summary) if evaluation and evaluation.summary else 0,
+            )
             self._update_task_result(task.id, "evaluation", evaluation)
             context["evaluation"] = evaluation.model_dump()
 
+            logger.info("stage_start", task_id=task.id, stage="paper_draft")
             paper_draft = self.scientist.run("Draft a paper outline with claims, methods, and limitations.", context)
+            logger.info(
+                "stage_complete",
+                task_id=task.id,
+                stage="paper_draft",
+                summary_len=len(paper_draft.summary) if paper_draft and paper_draft.summary else 0,
+            )
             self._update_task_result(task.id, "paper_draft", paper_draft)
             context["paper_draft"] = paper_draft.model_dump()
 
+            logger.info("stage_start", task_id=task.id, stage="review")
             review = self.critic.run("Review the paper draft and challenge weak claims.", context)
+            logger.info(
+                "stage_complete",
+                task_id=task.id,
+                stage="review",
+                summary_len=len(review.summary) if review and review.summary else 0,
+            )
             self._update_task_result(task.id, "review", review)
             context["review"] = review.model_dump()
 
+            logger.info("stage_start", task_id=task.id, stage="memory_update")
             memory_update = self.memory_agent.run("Consolidate pipeline memories and timeline.", context)
+            logger.info(
+                "stage_complete",
+                task_id=task.id,
+                stage="memory_update",
+                summary_len=len(memory_update.summary) if memory_update and memory_update.summary else 0,
+            )
             self._update_task_result(task.id, "memory_update", memory_update)
             results = [
                 plan,
@@ -146,6 +220,7 @@ class ResearchPipeline:
             self.session.rollback()
             failed_task = self.session.get(TaskORM, task.id)
             tb = traceback.format_exc()
+            logger.exception("pipeline_failed", task_id=task.id, error=str(e), traceback=tb)
             if failed_task is not None:
                 failed_task.status = "failed"
                 existing = failed_task.result or {}

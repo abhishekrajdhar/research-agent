@@ -1,6 +1,8 @@
 from typing import Any, Protocol
 
+import logging
 import httpx
+import time
 
 from app.core.config import Settings, get_settings
 
@@ -81,9 +83,56 @@ class GeminiClient:
 
 def create_llm_client(settings: Settings | None = None) -> LLMClient:
     active_settings = settings or get_settings()
-    provider = active_settings.llm_provider.strip().lower()
-    if provider == "gemini":
-        return GeminiClient(active_settings)
-    if provider == "hermes":
-        return HermesClient(active_settings)
-    raise ValueError(f"Unsupported LLM_PROVIDER: {active_settings.llm_provider}")
+
+    class FallbackLLMClient:
+        """LLM client wrapper that always tries Gemini first, then Hermes on failure.
+
+        - If Gemini is configured, it will call GeminiClient.complete(). If the request
+          raises an exception (HTTP error, network, etc.), it will log a warning and
+          fall back to HermesClient.complete().
+        - HermesClient will itself return an offline stub when no HERMES_API_KEY is set.
+        """
+
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+            self.gemini = GeminiClient(settings)
+            self.hermes = HermesClient(settings)
+            self.logger = logging.getLogger("llm.fallback")
+        def complete(self, system: str, prompt: str) -> str:
+            # Try Gemini first with a small retry/backoff loop. If all attempts fail,
+            # fall back to Hermes. This ensures transient Gemini errors (rate limits,
+            # transient 5xx) don't immediately force a fallback and gives Gemini a
+            # chance to serve every agent.
+            max_attempts = 3
+            backoff_base = 0.8
+            last_exc: Exception | None = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    self.logger.debug("gemini_attempt %s/%s", attempt, max_attempts)
+                    return self.gemini.complete(system, prompt)
+                except Exception as e:
+                    last_exc = e
+                    # If Gemini is not configured and raises immediately (offline stub),
+                    # don't sleep needlessly; break and fall back.
+                    if "Offline Gemini adapter response" in str(getattr(e, "args", [""])[0]):
+                        self.logger.warning("gemini_offline_stub_detected, falling back to Hermes")
+                        break
+                    # log and backoff before retrying
+                    self.logger.warning("gemini_attempt_failed attempt=%s error=%s", attempt, str(e))
+                    if attempt < max_attempts:
+                        sleep_for = backoff_base * (2 ** (attempt - 1))
+                        try:
+                            time.sleep(sleep_for)
+                        except Exception:
+                            pass
+
+            # All Gemini attempts failed — try Hermes as a fallback
+            self.logger.warning("gemini_all_attempts_failed_falling_back_to_hermes error=%s", str(last_exc))
+            try:
+                return self.hermes.complete(system, prompt)
+            except Exception as e2:
+                self.logger.error("hermes_fallback_failed error=%s", str(e2))
+                # If Hermes also fails, propagate the original Gemini exception if available
+                raise last_exc or e2
+
+    return FallbackLLMClient(active_settings)

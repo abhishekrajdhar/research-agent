@@ -3,6 +3,7 @@ from typing import Any
 
 import httpx
 import streamlit as st
+import time
 
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/")
@@ -89,22 +90,68 @@ def render_research_form() -> None:
     # poll for incremental results
     placeholder = st.empty()
     finished = False
+    max_polls = 60 * 10  # 10 minutes max by default
+    poll_interval = 1.0
+    consecutive_errors = 0
+    max_consecutive_errors = 5
+    start_ts = time.time()
+
     with placeholder.container():
-        while not finished:
+        poll_count = 0
+        # create single placeholders for status and elapsed so we update in-place
+        status_ph = st.empty()
+        elapsed_ph = st.empty()
+        progress_ph = st.progress(0)
+        while not finished and poll_count < max_polls:
             try:
                 status = request_json("GET", f"/tasks/{task_id}")
+                consecutive_errors = 0
             except Exception as exc:
-                st.error(f"Could not fetch task status: {exc}")
-                return
+                consecutive_errors += 1
+                status_ph.warning(f"Could not fetch task status (attempt {consecutive_errors}): {exc}")
+                if consecutive_errors >= max_consecutive_errors:
+                    status_ph.error("Too many consecutive errors fetching task status — aborting.")
+                    return
+                time.sleep(min(5, poll_interval * consecutive_errors))
+                poll_count += 1
+                continue
 
-            st.write(f"Task {task_id} — status: {status.get('status')}")
-            result = status.get("result", {})
+            poll_count += 1
+            elapsed = int(time.time() - start_ts)
+            # update placeholders in-place
+            elapsed_ph.text(f"Elapsed: {elapsed}s")
+            result = status.get("result", {}) or {}
+
+            # show concise agent-level progress while pipeline is running
+            current_worker = _current_stage_from_result(result)
+            if current_worker and status.get("status") not in {"completed", "failed"}:
+                status_ph.info(f"{current_worker} is working...")
+            else:
+                status_ph.info(f"Task {task_id} — status: {status.get('status')}")
+                # render whatever partial results we have (for visibility)
+                render_pipeline_result_partial(result)
+
             if status.get("status") in {"completed", "failed"}:
                 finished = True
-            # render whatever partial results we have
-            render_pipeline_result_partial(result)
+                break
+
+            # show a lightweight progress indicator for the polling duration
+            try:
+                # scale progress to max_polls
+                prog = min(1.0, poll_count / max_polls)
+                progress_ph.progress(int(prog * 100))
+            except Exception:
+                pass
+
+            time.sleep(poll_interval)
+
             if not finished:
-                st.sleep(1)
+                status_ph.error("Polling timed out before the pipeline completed. Check the Tasks tab for details.")
+        else:
+            # show final output only once finished
+            if status.get("status") == "completed":
+                final_result = status.get("result", {}) or {}
+                render_pipeline_result(final_result)
 
     if status.get("status") == "completed":
         st.success(f"Completed task {task_id}")
@@ -114,6 +161,16 @@ def render_research_form() -> None:
 
 def render_pipeline_result_partial(result: dict[str, Any]) -> None:
     st.subheader("Pipeline (partial)")
+    # surface top-level pipeline errors, if any
+    if not result:
+        st.caption("No results yet.")
+    if result.get("error"):
+        st.error(f"Pipeline error: {result.get('error')}")
+        tb = result.get("traceback")
+        if tb:
+            with st.expander("Traceback"):
+                # show only the last 2000 characters to avoid huge output
+                st.text(tb[-2000:])
     stages = [
         ("Plan", "plan"),
         ("Literature", "literature_review"),
@@ -143,6 +200,13 @@ def render_pipeline_result_partial(result: dict[str, Any]) -> None:
 
 def render_pipeline_result(result: dict[str, Any]) -> None:
     st.subheader("Pipeline Output")
+    # show pipeline-level error if present
+    if result.get("error"):
+        st.error(f"Pipeline error: {result.get('error')}")
+        tb = result.get("traceback")
+        if tb:
+            with st.expander("Traceback"):
+                st.text(tb[-2000:])
     st.caption(f"Reflection: {result.get('reflection_id', 'not recorded')}")
     stages = [
         ("Literature", "literature_review"),
@@ -171,6 +235,44 @@ def render_pipeline_result(result: dict[str, Any]) -> None:
                 st.json(artifacts)
 
 
+def _human_stage_name(key: str) -> str:
+    mapping = {
+        "plan": "Planner",
+        "literature_review": "Research Scientist",
+        "gap_analysis": "Research Scientist",
+        "hypothesis": "Research Scientist",
+        "experiment_design": "ML Engineer",
+        "experiment_execution": "ML Engineer",
+        "evaluation": "Critic",
+        "paper_draft": "Research Scientist",
+        "review": "Critic",
+        "memory_update": "Memory Agent",
+    }
+    return mapping.get(key, key)
+
+
+def _current_stage_from_result(result: dict[str, Any]) -> str | None:
+    """Return the active worker name based on which stages are present in result.
+    If all stages present, return None (meaning pipeline likely completed).
+    """
+    ordered_keys = [
+        "plan",
+        "literature_review",
+        "gap_analysis",
+        "hypothesis",
+        "experiment_design",
+        "experiment_execution",
+        "evaluation",
+        "paper_draft",
+        "review",
+        "memory_update",
+    ]
+    for key in ordered_keys:
+        if key not in result:
+            return _human_stage_name(key)
+    return None
+
+
 def render_tasks() -> None:
     st.subheader("Tasks")
     try:
@@ -181,7 +283,52 @@ def render_tasks() -> None:
     if not tasks:
         st.info("No tasks yet.")
         return
-    st.dataframe(tasks, use_container_width=True, hide_index=True)
+    # present tasks in a select box to view details
+    options = [f"{r['title']} — {r['id']} — {r['status']}" for r in tasks]
+    choice = st.selectbox("Select a task to view (will wait until it's finished)", options)
+    if not choice:
+        return
+    # extract id from choice
+    task_id = choice.split(" — ")[-2] if " — " in choice else None
+    if not task_id:
+        st.error("Unable to determine task id from selection")
+        return
+
+    if st.button("Show final result", key=f"show_{task_id}"):
+        # Poll until the task is completed or failed, then render the final result only
+        max_polls = 60 * 10
+        poll_interval = 1.0
+        poll_count = 0
+        with st.spinner("Waiting for task to finish..."):
+            while poll_count < max_polls:
+                try:
+                    status = request_json("GET", f"/tasks/{task_id}")
+                except Exception as exc:
+                    st.warning(f"Error fetching task: {exc}")
+                    time.sleep(min(5, poll_interval * (poll_count + 1)))
+                    poll_count += 1
+                    continue
+
+                if status.get("status") == "completed":
+                    final_result = status.get("result", {}) or {}
+                    render_pipeline_result(final_result)
+                    return
+                if status.get("status") == "failed":
+                    # show the error info if present
+                    res = status.get("result", {}) or {}
+                    st.error(f"Task failed: {res.get('error', 'unknown error')}")
+                    tb = res.get("traceback")
+                    if tb:
+                        with st.expander("Traceback"):
+                            st.text(tb[-2000:])
+                    return
+
+                # still running
+                st.info(f"Task {task_id} is {status.get('status')} — waiting...")
+                time.sleep(poll_interval)
+                poll_count += 1
+
+            st.error("Timed out waiting for task to complete. Check later under Tasks.")
 
 
 def render_memory() -> None:
