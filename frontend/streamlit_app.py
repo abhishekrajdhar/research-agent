@@ -68,9 +68,9 @@ def render_research_form() -> None:
         st.warning("Use a more specific research question.")
         return
 
-    with st.spinner("Running multi-agent pipeline..."):
+    with st.spinner("Queuing multi-agent pipeline..."):
         try:
-            result = request_json("POST", "/research", json=payload)
+            resp = request_json("POST", "/research", json=payload)
         except httpx.HTTPStatusError as exc:
             st.error(f"Research run failed: HTTP {exc.response.status_code}")
             st.code(exc.response.text)
@@ -79,8 +79,66 @@ def render_research_form() -> None:
             st.error(f"Research run failed: {exc}")
             return
 
-    st.success(f"Completed task {result['task_id']}")
-    render_pipeline_result(result)
+    task_id = resp.get("task_id")
+    if not task_id:
+        st.error("No task id returned from API")
+        return
+
+    st.info(f"Task queued: {task_id}")
+
+    # poll for incremental results
+    placeholder = st.empty()
+    finished = False
+    with placeholder.container():
+        while not finished:
+            try:
+                status = request_json("GET", f"/tasks/{task_id}")
+            except Exception as exc:
+                st.error(f"Could not fetch task status: {exc}")
+                return
+
+            st.write(f"Task {task_id} — status: {status.get('status')}")
+            result = status.get("result", {})
+            if status.get("status") in {"completed", "failed"}:
+                finished = True
+            # render whatever partial results we have
+            render_pipeline_result_partial(result)
+            if not finished:
+                st.sleep(1)
+
+    if status.get("status") == "completed":
+        st.success(f"Completed task {task_id}")
+    else:
+        st.error(f"Task {task_id} finished with status: {status.get('status')}")
+
+
+def render_pipeline_result_partial(result: dict[str, Any]) -> None:
+    st.subheader("Pipeline (partial)")
+    stages = [
+        ("Plan", "plan"),
+        ("Literature", "literature_review"),
+        ("Gap Analysis", "gap_analysis"),
+        ("Hypothesis", "hypothesis"),
+        ("Experiment Design", "experiment_design"),
+        ("Experiment Execution", "experiment_execution"),
+        ("Evaluation", "evaluation"),
+        ("Paper Draft", "paper_draft"),
+        ("Review", "review"),
+        ("Memory Update", "memory_update"),
+    ]
+    for label, key in stages:
+        stage = result.get(key)
+        if not stage:
+            st.caption(f"{label}: (pending)")
+            continue
+        with st.expander(label, expanded=False):
+            st.write(stage.get("summary", "No summary"))
+            st.progress(float(stage.get("confidence", 0.0)))
+            findings = stage.get("findings", [])
+            if findings:
+                st.markdown("**Findings**")
+                for finding in findings:
+                    st.write(f"- {finding}")
 
 
 def render_pipeline_result(result: dict[str, Any]) -> None:
