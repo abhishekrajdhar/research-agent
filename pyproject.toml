@@ -1,0 +1,40 @@
+[project]
+name = "autonomous-research-lab"
+version = "0.1.0"
+description = "Self-improving multi-agent AI research laboratory with Hermes Agent and GBrain adapters."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "pydantic>=2.8.0",
+  "pydantic-settings>=2.4.0",
+  "sqlalchemy>=2.0.30",
+  "psycopg[binary]>=3.2.0",
+  "redis>=5.0.7",
+  "qdrant-client>=1.11.0",
+  "httpx>=0.27.0",
+  "tenacity>=8.5.0",
+  "structlog>=24.2.0",
+  "prometheus-client>=0.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+  "pytest-asyncio>=0.23.8",
+  "ruff>=0.6.0",
+  "mypy>=1.11.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
