@@ -38,7 +38,14 @@ class ResearchPipeline:
         if task is None:
             return
         existing = task.result or {}
-        existing[stage_key] = result.model_dump()
+        stage_data = result.model_dump()
+        # attach provider metadata if the LLM wrapper exposed which provider was used
+        provider = getattr(self.llm, "last_provider", None)
+        if provider:
+            artifacts = stage_data.get("artifacts") or {}
+            artifacts["provider"] = provider
+            stage_data["artifacts"] = artifacts
+        existing[stage_key] = stage_data
         task.result = existing
         # keep status running while updating
         task.status = "running"

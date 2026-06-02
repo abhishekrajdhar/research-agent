@@ -1,0 +1,20 @@
+# Example Render manifest (edit values before use)
+services:
+  - type: web
+    name: learning-api
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    buildCommand: ''
+    startCommand: uvicorn main:app --host 0.0.0.0 --port 8000
+
+  - type: web
+    name: learning-frontend
+    env: docker
+    dockerfilePath: ./Dockerfile.frontend
+    plan: free
+    buildCommand: ''
+    startCommand: streamlit run frontend/streamlit_app.py --server.port 8501
+
+# You will also want a managed Postgres instance created in Render and its
+# DATABASE_URL placed into the backend service settings.
