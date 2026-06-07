@@ -7,7 +7,7 @@ A lightweight production scaffold for an autonomous research pipeline. It includ
 - Durable storage in PostgreSQL, an optional Qdrant vector index for semantic search, and a simple local GBrain fallback.
 - Streamlit frontend, FastAPI backend, Prometheus metrics, and Docker Compose for local development.
 
-This repository is intended as a deployable starting point. See `README_DEPLOY.md` for Render-specific instructions.
+This repository is intended as a deployable starting point. 
 
 Quick start (Docker Compose)
 
